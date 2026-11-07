@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: pp
+      POSTGRES_PASSWORD: pp
+    ports: ['5432:5432']
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/init-databases.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U pp']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    ports: ['5672:5672', '15672:15672']
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  wallet:
+    profiles: [app]
+    build: { context: ., args: { SERVICE: wallet-service } }
+    environment:
+      PORT: 3001
+      DATABASE_URL: postgres://pp:pp@postgres:5432/wallet
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672
+    ports: ['3001:3001']
+    depends_on: &infra
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+
+  payments:
+    profiles: [app]
+    build: { context: ., args: { SERVICE: payments-service } }
+    environment:
+      PORT: 3002
+      DATABASE_URL: postgres://pp:pp@postgres:5432/payments
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672
+      WALLET_URL: http://wallet:3001
+    ports: ['3002:3002']
+    depends_on: *infra
+
+  notifications:
+    profiles: [app]
+    build: { context: ., args: { SERVICE: notifications-service } }
+    environment:
+      PORT: 3003
+      DATABASE_URL: postgres://pp:pp@postgres:5432/notifications
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672
+      # Демо: разрешаем вебхуки на частные адреса. В боевом окружении оставить false.
+      ALLOW_PRIVATE_WEBHOOK_TARGETS: 'true'
+    ports: ['3003:3003']
+    depends_on: *infra
+
+volumes:
+  pgdata:

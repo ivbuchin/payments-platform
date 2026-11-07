@@ -1,0 +1,42 @@
+{
+  "name": "@pp/payments-service",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "node dist/main.js",
+    "dev": "tsc -b && node --enable-source-maps dist/main.js",
+    "test": "jest --runInBand"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.2.8",
+    "@nestjs/core": "^11.2.8",
+    "@nestjs/platform-express": "^11.2.8",
+    "@nestjs/swagger": "^11.4.8",
+    "@nestjs/typeorm": "^11.0.3",
+    "@pp/contracts": "workspace:*",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "pg": "^8.23.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "typeorm": "^0.3.31",
+    "zod": "^4.6.7",
+    "@pp/nest-kit": "workspace:*",
+    "@pp/outbox": "workspace:*"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^11.2.8",
+    "@testcontainers/postgresql": "^12.2.1",
+    "@types/express": "^5.0.6",
+    "@types/jest": "^30.0.0",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
+    "jest": "^30.5.2",
+    "supertest": "^7.3.1",
+    "testcontainers": "^12.2.1",
+    "ts-jest": "^29.4.15"
+  },
+  "files": [
+    "dist"
+  ]
+}

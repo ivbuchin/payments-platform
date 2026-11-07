@@ -1,0 +1,23 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "libs/contracts"
+    },
+    {
+      "path": "libs/nest-kit"
+    },
+    {
+      "path": "libs/outbox"
+    },
+    {
+      "path": "apps/wallet-service"
+    },
+    {
+      "path": "apps/payments-service"
+    },
+    {
+      "path": "apps/notifications-service"
+    }
+  ]
+}

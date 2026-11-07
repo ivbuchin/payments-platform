@@ -1,0 +1,27 @@
+{
+  "name": "payments-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Учебная платёжная платформа: wallet, payments и notifications на NestJS + PostgreSQL",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "build": "tsc -b",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "pnpm -r --workspace-concurrency=1 test",
+    "infra:up": "docker compose up -d postgres rabbitmq",
+    "infra:down": "docker compose down"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.6",
+    "eslint": "^10.14.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1"
+  }
+}

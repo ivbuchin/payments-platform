@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"],
+  "references": [
+    {
+      "path": "../../libs/contracts"
+    },
+    {
+      "path": "../../libs/nest-kit"
+    },
+    {
+      "path": "../../libs/outbox"
+    }
+  ],
+  "exclude": ["src/**/*.spec.ts"]
+}

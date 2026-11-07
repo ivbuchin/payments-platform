@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "noEmit": true,
+    "types": ["jest", "node"],
+    "rootDir": ".."
+  },
+  "include": ["./**/*.ts", "../apps/*/src/**/*.ts", "../libs/*/src/**/*.ts"],
+  "exclude": ["../apps/*/src/**/*.spec.ts", "**/node_modules"]
+}
