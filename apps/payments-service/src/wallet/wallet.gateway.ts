@@ -1,3 +1,9 @@
+export interface WalletAccount {
+  id: string;
+  currency: string;
+  kind: 'user' | 'system';
+}
+
 export interface WalletHold {
   id: string;
   currency: string;
@@ -27,6 +33,9 @@ export class WalletUnavailableError extends Error {
  * поэтому повтор после сбоя не удвоит списание.
  */
 export abstract class WalletGateway {
+  /** Бизнес-отказ `ACCOUNT_NOT_FOUND`, если счёта нет. */
+  abstract getAccount(id: string): Promise<WalletAccount>;
+
   abstract createHold(input: {
     idempotencyKey: string;
     accountId: string;

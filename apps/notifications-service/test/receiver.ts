@@ -11,6 +11,8 @@ export class Receiver {
   readonly requests: ReceivedRequest[] = [];
   /** Статусы для ближайших запросов; когда очередь пуста — отвечает 200. */
   statuses: number[] = [];
+  /** Задержка ответа, мс: делает окно гонки между воркерами заметным. */
+  delayMs = 0;
   private server!: Server;
   url!: string;
 
@@ -21,7 +23,7 @@ export class Receiver {
       req.on('end', () => {
         this.requests.push({ headers: req.headers, body: Buffer.concat(chunks).toString('utf8') });
         res.statusCode = this.statuses.shift() ?? 200;
-        res.end('ok');
+        setTimeout(() => res.end('ok'), this.delayMs);
       });
     });
     await new Promise<void>((resolve) => this.server.listen(0, '127.0.0.1', resolve));
@@ -31,6 +33,7 @@ export class Receiver {
   reset(): void {
     this.requests.length = 0;
     this.statuses = [];
+    this.delayMs = 0;
   }
 
   stop(): Promise<void> {

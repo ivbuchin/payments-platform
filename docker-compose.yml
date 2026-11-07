@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_USER: pp
       POSTGRES_PASSWORD: pp
-    ports: ['5432:5432']
+    ports: ['${PG_PORT:-5432}:5432']
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./infra/init-databases.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -31,6 +31,18 @@ services:
       DATABASE_URL: postgres://pp:pp@postgres:5432/wallet
       AMQP_URL: amqp://guest:guest@rabbitmq:5672
     ports: ['3001:3001']
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health/live').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
     depends_on: &infra
       postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
@@ -43,8 +55,23 @@ services:
       DATABASE_URL: postgres://pp:pp@postgres:5432/payments
       AMQP_URL: amqp://guest:guest@rabbitmq:5672
       WALLET_URL: http://wallet:3001
+      WALLET_KEY_SECRET: ${WALLET_KEY_SECRET:?задайте WALLET_KEY_SECRET (openssl rand -hex 24)}
     ports: ['3002:3002']
-    depends_on: *infra
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3002/health/live').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    depends_on:
+      <<: *infra
+      wallet: { condition: service_healthy }
 
   notifications:
     profiles: [app]
@@ -55,7 +82,21 @@ services:
       AMQP_URL: amqp://guest:guest@rabbitmq:5672
       # Демо: разрешаем вебхуки на частные адреса. В боевом окружении оставить false.
       ALLOW_PRIVATE_WEBHOOK_TARGETS: 'true'
+    # Демо-получатель вебхуков запускается на хосте (scripts/smoke.sh); на Linux имя нужно объявить.
+    extra_hosts: ['host.docker.internal:host-gateway']
     ports: ['3003:3003']
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3003/health/live').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
     depends_on: *infra
 
 volumes:

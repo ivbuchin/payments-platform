@@ -14,6 +14,7 @@ export class OutboxWriter {
       payload: event.payload,
       occurredAt: new Date(),
       publishedAt: null,
+      lockedUntil: null,
     });
   }
 }

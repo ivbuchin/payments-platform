@@ -9,6 +9,8 @@ export class AmqpPublisher extends EventPublisher {
   private connection?: ChannelModel;
   private channel?: ConfirmChannel;
   private connecting?: Promise<ConfirmChannel>;
+  /** `messageId` сообщений, которые брокер вернул как немаршрутизируемые (basic.return). */
+  private readonly returned = new Set<string>();
 
   constructor(private readonly url: string) {
     super();
@@ -21,8 +23,15 @@ export class AmqpPublisher extends EventPublisher {
         EVENTS_EXCHANGE,
         event.type,
         Buffer.from(JSON.stringify(event)),
-        { persistent: true, messageId: event.id, contentType: 'application/json' },
-        (error) => (error ? reject(error) : resolve()),
+        { persistent: true, mandatory: true, messageId: event.id, contentType: 'application/json' },
+        (error) => {
+          if (error) return reject(error);
+          // basic.return приходит раньше basic.ack: ack получает и сообщение, не попавшее в очередь.
+          if (this.returned.delete(event.id)) {
+            return reject(new Error(`событие ${event.type} не маршрутизировано ни в одну очередь`));
+          }
+          resolve();
+        },
       );
     });
   }
@@ -47,6 +56,11 @@ export class AmqpPublisher extends EventPublisher {
       this.logger.warn(`AMQP-соединение потеряно: ${String(error)}`);
       this.reset();
     };
+    channel.on('return', (message: { properties: { messageId?: string } }) => {
+      if (message.properties.messageId) this.returned.add(message.properties.messageId);
+    });
+    channel.on('error', onFailure);
+    channel.on('close', () => this.reset());
     connection.on('error', onFailure);
     connection.on('close', () => this.reset());
     this.connection = connection;
@@ -57,5 +71,6 @@ export class AmqpPublisher extends EventPublisher {
   private reset(): void {
     this.connection = undefined;
     this.channel = undefined;
+    this.returned.clear();
   }
 }

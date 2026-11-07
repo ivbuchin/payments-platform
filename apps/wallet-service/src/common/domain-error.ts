@@ -8,6 +8,8 @@ export type DomainErrorCode =
   | 'CURRENCY_MISMATCH'
   | 'SAME_ACCOUNT'
   | 'INSUFFICIENT_FUNDS'
+  | 'SYSTEM_ACCOUNT_FORBIDDEN'
+  | 'BALANCE_LIMIT_EXCEEDED'
   | 'IDEMPOTENCY_KEY_REUSED'
   | 'HOLD_NOT_FOUND'
   | 'HOLD_STATE_CONFLICT';
@@ -22,6 +24,8 @@ const HTTP_STATUS: Record<DomainErrorCode, number> = {
   CURRENCY_MISMATCH: 422,
   SAME_ACCOUNT: 422,
   INSUFFICIENT_FUNDS: 422,
+  BALANCE_LIMIT_EXCEEDED: 422,
+  SYSTEM_ACCOUNT_FORBIDDEN: 403,
 };
 
 /** Бизнес-ошибка wallet-service; транспортный слой (`DomainErrorFilter`) отдаёт её как `{ code, message }`. */

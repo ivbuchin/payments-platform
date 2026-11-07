@@ -4,6 +4,7 @@ import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
+import { PaymentsService } from '../src/payments/payments.service';
 import { WalletGateway } from '../src/wallet/wallet.gateway';
 import { FakeWallet } from './fake-wallet';
 
@@ -11,6 +12,7 @@ export interface TestApp {
   app: INestApplication;
   dataSource: DataSource;
   wallet: FakeWallet;
+  payments: PaymentsService;
   url: string;
   stop(): Promise<void>;
 }
@@ -24,6 +26,8 @@ export async function startTestApp(): Promise<TestApp> {
       AppModule.forRoot({
         databaseUrl: container.getConnectionUri(),
         walletUrl: 'http://wallet.invalid',
+        walletKeySecret: 'test-secret-0123456789',
+        reconcile: { intervalMs: 0, staleAfterMs: 0, authorizationTtlMs: 0 },
       }),
     ],
   })
@@ -39,6 +43,7 @@ export async function startTestApp(): Promise<TestApp> {
     app,
     dataSource: app.get(DataSource),
     wallet,
+    payments: app.get(PaymentsService),
     url: await app.getUrl(),
     stop: async () => {
       await app.close();

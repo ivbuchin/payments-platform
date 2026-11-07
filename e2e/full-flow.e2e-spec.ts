@@ -115,7 +115,12 @@ beforeAll(async () => {
   const { configureApp: configurePayments } =
     await import('../apps/payments-service/src/app.setup');
   payments = await boot(
-    PaymentsModule.forRoot({ databaseUrl: dbUrl('payments'), walletUrl: urls.wallet, amqpUrl }),
+    PaymentsModule.forRoot({
+      databaseUrl: dbUrl('payments'),
+      walletUrl: urls.wallet,
+      walletKeySecret: 'e2e-secret-0123456789',
+      amqpUrl,
+    }),
     configurePayments,
   );
   urls.payments = await payments.getUrl();

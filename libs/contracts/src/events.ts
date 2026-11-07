@@ -18,15 +18,8 @@ export interface EventEnvelope<TType extends string, TPayload> {
 /** Суммы передаются строкой в минорных единицах (копейки), чтобы не терять точность bigint. */
 export type MinorUnits = string;
 
-export interface HoldCreatedPayload {
-  holdId: string;
-  accountId: string;
-  amount: MinorUnits;
-  currency: string;
-  reference: string | null;
-}
-
-export interface HoldSettledPayload {
+/** Полезная нагрузка всех событий холда (создан, списан, снят). */
+export interface HoldPayload {
   holdId: string;
   accountId: string;
   amount: MinorUnits;
@@ -44,9 +37,9 @@ export interface TransferCompletedPayload {
 }
 
 export type WalletEvent =
-  | EventEnvelope<'wallet.hold.created', HoldCreatedPayload>
-  | EventEnvelope<'wallet.hold.captured', HoldSettledPayload>
-  | EventEnvelope<'wallet.hold.released', HoldSettledPayload>
+  | EventEnvelope<'wallet.hold.created', HoldPayload>
+  | EventEnvelope<'wallet.hold.captured', HoldPayload>
+  | EventEnvelope<'wallet.hold.released', HoldPayload>
   | EventEnvelope<'wallet.transfer.completed', TransferCompletedPayload>;
 
 export type PaymentStatus =

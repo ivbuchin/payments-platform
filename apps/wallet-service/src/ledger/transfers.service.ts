@@ -61,6 +61,7 @@ export class TransfersService {
         toAccountId: target.id,
         amount: input.amount,
         reference: input.reference,
+        allowSystemAccount: true,
       });
     });
   }

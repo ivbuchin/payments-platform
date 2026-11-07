@@ -7,6 +7,12 @@ import { DataSource } from 'typeorm';
 export class HealthController {
   constructor(private readonly dataSource: DataSource) {}
 
+  /** Liveness: процесс жив и обслуживает запросы. Не зависит от внешних систем. */
+  @Get('live')
+  live() {
+    return { status: 'ok' };
+  }
+
   /** Readiness: сервис готов, только если отвечает БД. */
   @Get()
   async check() {

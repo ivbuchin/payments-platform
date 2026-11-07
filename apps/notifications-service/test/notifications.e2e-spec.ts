@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { verifySignatureHeader } from '../src/delivery/signing';
 import { Receiver } from './receiver';
-import { MAX_ATTEMPTS, startTestApp, type TestApp } from './test-app';
+import { DeliveryWorker } from '../src/delivery/delivery-worker';
+import { DELIVERY_OPTIONS_FOR_TESTS, MAX_ATTEMPTS, startTestApp, type TestApp } from './test-app';
 
 let t: TestApp;
 const receiver = new Receiver();
@@ -208,6 +209,88 @@ describe('доставка', () => {
     expect(await deliveriesOf(ev.id)).toEqual([
       { status: 'pending', attempts: 1, lastStatusCode: 302 },
     ]);
+  });
+
+  it('два воркера на одной БД доставляют каждое событие ровно один раз', async () => {
+    await subscribe(['*']);
+    const events = Array.from({ length: 24 }, () => event());
+    for (const ev of events) await t.ingest.ingest(ev);
+    receiver.delayMs = 15; // отправка заметно длиннее захвата — окно для гонки
+    const options = { ...DELIVERY_OPTIONS_FOR_TESTS, batchSize: 4 };
+    const second = new DeliveryWorker(t.dataSource, options, true);
+    const run = async (worker: DeliveryWorker) => {
+      while ((await worker.runOnce()) > 0);
+    };
+
+    await Promise.all([run(t.worker), run(second)]);
+
+    const seen = receiver.requests.map((r) => r.headers['x-pp-event-id']);
+    expect(seen).toHaveLength(events.length);
+    expect(new Set(seen).size).toBe(events.length);
+  });
+
+  it('захваченная доставка не берётся повторно, пока действует аренда', async () => {
+    await subscribe(['*']);
+    await t.ingest.ingest(event());
+    // Имитация упавшего воркера: доставка захвачена (next_attempt_at в будущем), но не записана.
+    await t.dataSource.query(
+      `UPDATE webhook_deliveries SET next_attempt_at = now() + interval '1 hour'`,
+    );
+
+    expect(await t.worker.runOnce()).toBe(0);
+    expect(receiver.requests).toHaveLength(0);
+
+    await t.dataSource.query(`UPDATE webhook_deliveries SET next_attempt_at = now()`);
+    expect(await t.worker.runOnce()).toBe(1);
+    expect(receiver.requests).toHaveLength(1);
+  });
+
+  it('в боевом режиме не подключается к локальному адресу и не раскрывает причину сбоя', async () => {
+    await subscribe(['*']); // регистрация в тестовом приложении разрешена (allowPrivate)
+    const ev = event();
+    await t.ingest.ingest(ev);
+    const strict = new DeliveryWorker(t.dataSource, DELIVERY_OPTIONS_FOR_TESTS, false);
+
+    await strict.runOnce();
+
+    expect(receiver.requests).toHaveLength(0);
+    const [row] = await t.dataSource.query(
+      `SELECT last_error AS "lastError", last_status_code AS "code" FROM webhook_deliveries WHERE event_id = $1`,
+      [ev.id],
+    );
+    expect(row.code).toBeNull();
+    expect(row.lastError).toBe('адрес получателя запрещён политикой безопасности');
+  });
+
+  it('имя, резолвящееся в локальный адрес (localhost), блокируется при соединении', async () => {
+    await subscribe(['*'], receiver.url.replace('127.0.0.1', 'localhost'));
+    const ev = event();
+    await t.ingest.ingest(ev);
+    const strict = new DeliveryWorker(t.dataSource, DELIVERY_OPTIONS_FOR_TESTS, false);
+
+    await strict.runOnce();
+
+    expect(receiver.requests).toHaveLength(0);
+    const [row] = await t.dataSource.query(
+      `SELECT last_error AS "lastError" FROM webhook_deliveries WHERE event_id = $1`,
+      [ev.id],
+    );
+    expect(row.lastError).toBe('адрес получателя запрещён политикой безопасности');
+  });
+
+  it('сетевые сбои выглядят одинаково: отказ в соединении не отличить от прочих', async () => {
+    const closed = await subscribe(['*'], 'http://127.0.0.1:1/hook');
+    expect(closed.id).toBeDefined();
+    const ev = event();
+    await t.ingest.ingest(ev);
+
+    await t.worker.runOnce();
+
+    const [row] = await t.dataSource.query(
+      `SELECT last_error AS "lastError" FROM webhook_deliveries WHERE event_id = $1`,
+      [ev.id],
+    );
+    expect(row.lastError).toBe('не удалось выполнить запрос к получателю (сеть, TLS или таймаут)');
   });
 
   it('удаление подписки убирает её недоставленные события', async () => {

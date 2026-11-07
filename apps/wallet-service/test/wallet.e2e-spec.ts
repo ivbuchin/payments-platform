@@ -296,6 +296,151 @@ describe('холды', () => {
   });
 });
 
+describe('границы доверия', () => {
+  /** Идентификатор системного счёта виден клиенту в `fromAccountId` любого пополнения. */
+  async function systemAccountId(): Promise<string> {
+    const id = await openAccount(`sys-probe-${randomUUID()}`);
+    const res = await http()
+      .post(`/accounts/${id}/deposits`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ amount: '1' })
+      .expect(201);
+    return res.body.fromAccountId;
+  }
+
+  it('нельзя выпустить деньги переводом с системного счёта', async () => {
+    const system = await systemAccountId();
+    const victim = await openAccount(`mint-${randomUUID()}`);
+
+    const res = await transfer(system, victim, '100000');
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('SYSTEM_ACCOUNT_FORBIDDEN');
+    expect(await snapshot(victim)).toMatchObject({ balance: '0' });
+  });
+
+  it('системный счёт закрыт и как получатель перевода, capture и холда', async () => {
+    const system = await systemAccountId();
+    const user = await openAccount(`to-system-${randomUUID()}`);
+    await deposit(user, '1000');
+    const { body: h } = await http()
+      .post('/holds')
+      .set('Idempotency-Key', randomUUID())
+      .send({ accountId: user, amount: '100' })
+      .expect(201);
+
+    expect((await transfer(user, system, '100')).body.code).toBe('SYSTEM_ACCOUNT_FORBIDDEN');
+    const capture = await http().post(`/holds/${h.id}/capture`).send({ toAccountId: system });
+    expect(capture.status).toBe(403);
+    const hold = await http()
+      .post('/holds')
+      .set('Idempotency-Key', randomUUID())
+      .send({ accountId: system, amount: '1' });
+    expect(hold.status).toBe(403);
+    expect(await snapshot(user)).toMatchObject({ balance: '1000', held: '100' });
+  });
+
+  it.each(['#hold-capture:abc', 'a b', 'a/b'])(
+    'клиентский Idempotency-Key %j вне разрешённого алфавита отклоняется',
+    async (key) => {
+      const a = await openAccount(`key-a-${randomUUID()}`);
+      const b = await openAccount(`key-b-${randomUUID()}`);
+      const res = await http()
+        .post('/transfers')
+        .set('Idempotency-Key', key)
+        .send({ fromAccountId: a, toAccountId: b, amount: '1' });
+      expect(res.status).toBe(400);
+    },
+  );
+
+  it('capture не блокируется заранее занятым «внутренним» ключом', async () => {
+    const payer = await openAccount(`squat-payer-${randomUUID()}`);
+    const payee = await openAccount(`squat-payee-${randomUUID()}`);
+    await deposit(payer, '1000');
+    const { body: h } = await http()
+      .post('/holds')
+      .set('Idempotency-Key', randomUUID())
+      .send({ accountId: payer, amount: '100' })
+      .expect(201);
+
+    // Раньше внутренний ключ capture был обычной строкой, и клиент мог занять его заранее.
+    await transfer(payer, payee, '1', `hold-capture:${h.id}`).expect(201);
+
+    await http().post(`/holds/${h.id}/capture`).send({ toAccountId: payee }).expect(200);
+    expect(await snapshot(payee)).toMatchObject({ balance: '101' });
+  });
+
+  it('отсутствующий reference и строка "null" — разные запросы', async () => {
+    const a = await openAccount(`ref-a-${randomUUID()}`);
+    const b = await openAccount(`ref-b-${randomUUID()}`);
+    await deposit(a, '1000');
+    const key = randomUUID();
+
+    await http()
+      .post('/transfers')
+      .set('Idempotency-Key', key)
+      .send({ fromAccountId: a, toAccountId: b, amount: '10' })
+      .expect(201);
+    const res = await http()
+      .post('/transfers')
+      .set('Idempotency-Key', key)
+      .send({ fromAccountId: a, toAccountId: b, amount: '10', reference: 'null' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+  });
+
+  it('повтор холда с тем же ключом, но другой суммой — конфликт, а не прежний холд', async () => {
+    const id = await openAccount(`hold-replay-${randomUUID()}`);
+    await deposit(id, '1000');
+    const key = randomUUID();
+    const create = (amount: string) =>
+      http().post('/holds').set('Idempotency-Key', key).send({ accountId: id, amount });
+
+    await create('100').expect(201);
+    expect((await create('100')).status).toBe(201);
+    const res = await create('200');
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+    expect(await snapshot(id)).toMatchObject({ held: '100' });
+  });
+
+  it('переполнение баланса даёт 422, а не 500', async () => {
+    // Отдельная валюта: общий системный счёт валюты упирается в предел и не должен задеть другие тесты.
+    const id = (
+      await http()
+        .post('/accounts')
+        .send({ ownerId: `big-${randomUUID()}`, currency: 'XTS' })
+    ).body.id;
+    const huge = '999999999999';
+
+    let rejected: request.Response | undefined;
+    for (let i = 0; i < 12 && !rejected; i++) {
+      const res = await http()
+        .post(`/accounts/${id}/deposits`)
+        .set('Idempotency-Key', randomUUID())
+        .send({ amount: huge });
+      if (res.status !== 201) rejected = res;
+    }
+
+    expect(rejected?.status).toBe(422);
+    expect(rejected?.body.code).toBe('BALANCE_LIMIT_EXCEEDED');
+
+    // Упёршийся в предел клиент не мешает пополнять чужие счета в той же валюте.
+    const other = (
+      await http()
+        .post('/accounts')
+        .send({ ownerId: `other-${randomUUID()}`, currency: 'XTS' })
+    ).body.id;
+    const res = await http()
+      .post(`/accounts/${other}/deposits`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ amount: '100' });
+    expect(res.status).toBe(201);
+  });
+});
+
 describe('инварианты и события', () => {
   it('сумма всех балансов равна нулю, а баланс каждого счёта равен сумме его проводок', async () => {
     const [{ total }] = await t.dataSource.query(

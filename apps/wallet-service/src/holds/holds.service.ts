@@ -41,6 +41,9 @@ export class HoldsService {
       return await this.dataSource.transaction(async (manager) => {
         const accounts = await this.ledger.lockAccounts(manager, [input.accountId]);
         const account = accounts.get(input.accountId)!;
+        if (account.kind === 'system') {
+          throw new DomainError('SYSTEM_ACCOUNT_FORBIDDEN', 'Нельзя резервировать системный счёт');
+        }
         if (account.available < input.amount) {
           throw new DomainError(
             'INSUFFICIENT_FUNDS',
@@ -107,7 +110,9 @@ export class HoldsService {
 
       const transfer = await this.ledger.applyTransfer(manager, accounts, {
         // Детерминированный ключ: capture одного холда не может породить два перевода.
-        idempotencyKey: `hold-capture:${hold.id}`,
+        // Префикс `#` недопустим в клиентских ключах (см. `IdempotencyKey`), поэтому внутреннее
+        // пространство ключей не пересекается с клиентским.
+        idempotencyKey: `#hold-capture:${hold.id}`,
         requestHash: fingerprint(['capture', hold.id, toAccountId]),
         fromAccountId: hold.accountId,
         toAccountId,

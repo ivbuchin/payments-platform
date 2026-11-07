@@ -48,6 +48,10 @@ export class Payment {
   @Column({ type: 'text', name: 'failure_reason', nullable: true })
   failureReason: string | null;
 
+  /** Схема ключей идемпотентности wallet: 1 — `payment:<id>:…` (до обновления), 2 — HMAC. */
+  @Column({ type: 'smallint', name: 'key_version', default: 1 })
+  keyVersion: number;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;
 

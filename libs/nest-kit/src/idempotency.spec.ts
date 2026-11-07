@@ -10,6 +10,10 @@ describe('fingerprint', () => {
     expect(fingerprint(['a', 1n])).not.toBe(fingerprint(['a', 2n]));
   });
 
+  it('отличает null от строки "null"', () => {
+    expect(fingerprint(['a', null])).not.toBe(fingerprint(['a', 'null']));
+  });
+
   it('не склеивает соседние поля', () => {
     expect(fingerprint(['ab', 'c'])).not.toBe(fingerprint(['a', 'bc']));
   });

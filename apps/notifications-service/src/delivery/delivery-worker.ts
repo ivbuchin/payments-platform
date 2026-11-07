@@ -6,8 +6,10 @@ import {
   type OnApplicationShutdown,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { ALLOW_PRIVATE_TARGETS } from '../webhooks/webhooks.service';
 import { computeBackoffMs } from './backoff';
 import type { WebhookDelivery } from './delivery.entity';
+import { describeNetworkFailure, postWebhook } from './post-webhook';
 import { buildSignatureHeader } from './signing';
 
 export interface DeliveryOptions {
@@ -61,6 +63,7 @@ export class DeliveryWorker implements OnApplicationBootstrap, OnApplicationShut
   constructor(
     private readonly dataSource: DataSource,
     @Inject(DELIVERY_OPTIONS) private readonly options: DeliveryOptions,
+    @Inject(ALLOW_PRIVATE_TARGETS) private readonly allowPrivate: boolean,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -127,8 +130,7 @@ export class DeliveryWorker implements OnApplicationBootstrap, OnApplicationShut
     const body = JSON.stringify(row.payload);
     const timestamp = Math.floor(Date.now() / 1000);
     try {
-      const response = await fetch(endpoint.url, {
-        method: 'POST',
+      const statusCode = await postWebhook(endpoint.url, {
         headers: {
           'content-type': 'application/json',
           'user-agent': 'pp-notifications/0.1',
@@ -138,16 +140,15 @@ export class DeliveryWorker implements OnApplicationBootstrap, OnApplicationShut
           'x-pp-signature': buildSignatureHeader(endpoint.secret, timestamp, body),
         },
         body,
-        // Редиректы не выполняем: иначе публичный URL мог бы перенаправить нас во внутреннюю сеть.
-        redirect: 'manual',
-        signal: AbortSignal.timeout(this.options.timeoutMs),
+        timeoutMs: this.options.timeoutMs,
+        allowPrivate: this.allowPrivate,
       });
-      await response.body?.cancel();
-      return response.status >= 200 && response.status < 300
-        ? { ok: true, statusCode: response.status, error: null }
-        : { ok: false, statusCode: response.status, error: `HTTP ${response.status}` };
+      return statusCode >= 200 && statusCode < 300
+        ? { ok: true, statusCode, error: null }
+        : { ok: false, statusCode, error: `HTTP ${statusCode}` };
     } catch (error) {
-      return { ok: false, statusCode: null, error: String(error).slice(0, 500) };
+      this.logger.debug(`Сетевой сбой доставки ${row.id}: ${String(error)}`);
+      return { ok: false, statusCode: null, error: describeNetworkFailure(error) };
     }
   }
 

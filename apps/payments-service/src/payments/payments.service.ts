@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { PaymentStatus } from '@pp/contracts';
 import { fingerprint, isUniqueViolation } from '@pp/nest-kit';
 import { OutboxWriter } from '@pp/outbox';
+import { createHmac } from 'node:crypto';
 import { DataSource, type EntityManager } from 'typeorm';
 import {
   WalletGateway,
@@ -31,19 +32,49 @@ export interface CreatePaymentInput {
  *     на время сетевых вызовов; проигравший гонку перечитывает актуальное состояние.
  *  4. Переход, запись журнала и событие outbox атомарны.
  */
+/** Текущая схема ключей wallet; платежи с `keyVersion` 1 используют прежние предсказуемые ключи. */
+const CURRENT_KEY_VERSION = 2;
+
+/** Секрет, из которого выводятся ключи идемпотентности вызовов wallet. */
+export const WALLET_KEY_SECRET = Symbol('WALLET_KEY_SECRET');
+
 @Injectable()
 export class PaymentsService {
+  private readonly logger = new Logger(PaymentsService.name);
+
   constructor(
     private readonly dataSource: DataSource,
     private readonly wallet: WalletGateway,
     private readonly outbox: OutboxWriter,
+    @Inject(WALLET_KEY_SECRET) private readonly walletKeySecret: string,
   ) {}
+
+  /**
+   * Ключ идемпотентности вызова wallet. Детерминирован (повтор не удваивает операцию), но
+   * непредсказуем без секрета: клиент, знающий id платежа, не может заранее занять ключ в
+   * общем пространстве `Idempotency-Key` wallet и заблокировать возврат или резерв.
+   *
+   * Схема зависит от `payment.keyVersion`: операция, начатая до обновления, могла выполниться в
+   * wallet под прежним ключом, и повтор обязан его использовать — иначе деньги уйдут дважды.
+   * Секрет менять нельзя (повторы потеряют связь с выполненными операциями); для ротации нужна
+   * новая версия схемы, а не замена значения.
+   */
+  private walletKey(operation: 'hold' | 'refund', payment: Payment): string {
+    if (payment.keyVersion < 2) return `payment:${payment.id}:${operation}`;
+    const digest = createHmac('sha256', this.walletKeySecret)
+      .update(`${operation}:${payment.id}`)
+      .digest('hex');
+    return `i${digest}`;
+  }
 
   /**
    * Создаёт платёж и авторизует его (резервирует средства). Повтор с тем же ключом возвращает
    * тот же платёж; если прошлая попытка оборвалась на `created`, авторизация доводится до конца.
    */
   async create(input: CreatePaymentInput): Promise<Payment> {
+    if (input.payerAccountId === input.merchantAccountId) {
+      throw new DomainError('SAME_ACCOUNT', 'Плательщик и мерчант не могут совпадать');
+    }
     const requestHash = fingerprint([
       input.payerAccountId,
       input.merchantAccountId,
@@ -66,6 +97,7 @@ export class PaymentsService {
             amount: input.amount,
             currency: input.currency,
             status: 'created',
+            keyVersion: CURRENT_KEY_VERSION,
           }),
         );
         await this.publishStatus(manager, created);
@@ -78,7 +110,80 @@ export class PaymentsService {
       }
       throw error;
     }
-    return this.authorize(payment);
+    return this.authorizeOrReportId(payment);
+  }
+
+  /**
+   * Платёж, оборвавшийся на `created`, виден клиенту только по идентификатору из ошибки 503:
+   * повтор с тем же ключом, `POST /cancel` или фоновая сверка доведут его до итогового статуса.
+   */
+  private async authorizeOrReportId(payment: Payment): Promise<Payment> {
+    try {
+      return await this.authorize(payment);
+    } catch (error) {
+      if (error instanceof DomainError && error.code === 'WALLET_UNAVAILABLE') {
+        throw new DomainError(
+          'WALLET_UNAVAILABLE',
+          `${error.message}. Платёж ${payment.id} создан и будет доведён автоматически`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Сверка зависших платежей: `created` старше `olderThanMs` означает, что авторизация оборвалась
+   * (таймаут wallet, падение процесса). `authorize` идемпотентен и построен на CAS, поэтому сверку
+   * безопасно запускать параллельно с клиентскими повторами и на нескольких репликах.
+   * Возвращает число платежей, доведённых до итогового статуса.
+   */
+  async reconcileStale(olderThanMs: number, limit = 50): Promise<number> {
+    const stale = await this.dataSource.manager
+      .createQueryBuilder(Payment, 'p')
+      .where("p.status = 'created' AND p.updated_at < now() - make_interval(secs => :secs)", {
+        secs: olderThanMs / 1000,
+      })
+      .orderBy('p.updated_at', 'ASC')
+      .limit(limit)
+      .getMany();
+
+    let settled = 0;
+    for (const payment of stale) {
+      try {
+        if ((await this.authorize(payment)).status !== 'created') settled++;
+      } catch (error) {
+        this.logger.warn(`Сверка платежа ${payment.id} не удалась: ${String(error)}`);
+      }
+    }
+    return settled;
+  }
+
+  /**
+   * Снимает резерв у авторизованных платежей старше `ttlMs`, которые мерчант так и не списал и не
+   * отменил: иначе деньги плательщика заморожены бессрочно. Использует обычный `cancel`; проигранная
+   * гонка с `capture` (wallet отклонит снятие) не ошибка — платёж просто остаётся как есть.
+   * Возвращает число отменённых платежей.
+   */
+  async expireAuthorizations(ttlMs: number, limit = 50): Promise<number> {
+    const expired = await this.dataSource.manager
+      .createQueryBuilder(Payment, 'p')
+      .where("p.status = 'authorized' AND p.updated_at < now() - make_interval(secs => :secs)", {
+        secs: ttlMs / 1000,
+      })
+      .orderBy('p.updated_at', 'ASC')
+      .limit(limit)
+      .getMany();
+
+    let canceled = 0;
+    for (const payment of expired) {
+      try {
+        await this.cancel(payment.id);
+        canceled++;
+      } catch (error) {
+        this.logger.warn(`Истечение авторизации ${payment.id} не удалось: ${String(error)}`);
+      }
+    }
+    return canceled;
   }
 
   async get(id: string): Promise<{ payment: Payment; history: PaymentTransition[] }> {
@@ -109,8 +214,11 @@ export class PaymentsService {
 
   /** Отменяет авторизованный платёж и снимает резерв. */
   async cancel(id: string): Promise<Payment> {
-    const payment = await this.load(id);
+    let payment = await this.load(id);
     if (payment.status === 'canceled') return payment;
+    // Оборванная авторизация: холд в wallet мог быть создан, а платёж об этом не знает.
+    // Сначала доводим авторизацию (идемпотентно по ключу холда), затем отменяем как обычно.
+    if (payment.status === 'created') payment = await this.authorizeOrReportId(payment);
     this.assertTransition(payment, 'canceled');
 
     await this.callWallet(() => this.wallet.releaseHold(payment.holdId!)).catch(
@@ -127,7 +235,7 @@ export class PaymentsService {
 
     const { transferId } = await this.callWallet(() =>
       this.wallet.transfer({
-        idempotencyKey: `payment:${payment.id}:refund`,
+        idempotencyKey: this.walletKey('refund', payment),
         fromAccountId: payment.merchantAccountId,
         toAccountId: payment.payerAccountId,
         amount: payment.amount.toString(),
@@ -144,9 +252,10 @@ export class PaymentsService {
   /** Резервирует средства. Бизнес-отказ wallet → `failed`; недоступность → платёж остаётся `created`. */
   private async authorize(payment: Payment): Promise<Payment> {
     try {
+      await this.assertMerchant(payment);
       const hold = await this.callWallet(() =>
         this.wallet.createHold({
-          idempotencyKey: `payment:${payment.id}:hold`,
+          idempotencyKey: this.walletKey('hold', payment),
           accountId: payment.payerAccountId,
           amount: payment.amount.toString(),
           reference: payment.id,
@@ -156,7 +265,11 @@ export class PaymentsService {
         await this.callWallet(() => this.wallet.releaseHold(hold.id));
         return await this.move(payment, 'failed', { failureReason: 'CURRENCY_MISMATCH' });
       }
-      return await this.move(payment, 'authorized', { holdId: hold.id });
+      const moved = await this.move(payment, 'authorized', { holdId: hold.id });
+      // Проиграли гонку повторов: платёж уже `failed`, а холд создан — снимаем его, иначе
+      // средства останутся замороженными без платежа. Иные итоги (тот же холд) оставляем как есть.
+      if (moved.holdId !== hold.id) await this.callWallet(() => this.wallet.releaseHold(hold.id));
+      return moved;
     } catch (error) {
       if (error instanceof WalletRejectedError) {
         return this.move(payment, 'failed', { failureReason: error.code });
@@ -165,8 +278,19 @@ export class PaymentsService {
     }
   }
 
+  /** Счёт мерчанта проверяется до резервирования: иначе деньги плательщика замёрзли бы зря. */
+  private async assertMerchant(payment: Payment): Promise<void> {
+    const merchant = await this.callWallet(() => this.wallet.getAccount(payment.merchantAccountId));
+    if (merchant.kind !== 'user') {
+      throw new WalletRejectedError('MERCHANT_ACCOUNT_INVALID', 'Счёт мерчанта недопустим');
+    }
+    if (merchant.currency !== payment.currency) {
+      throw new WalletRejectedError('CURRENCY_MISMATCH', 'Валюта счёта мерчанта не совпадает');
+    }
+  }
+
   private resume(payment: Payment): Promise<Payment> | Payment {
-    return payment.status === 'created' ? this.authorize(payment) : payment;
+    return payment.status === 'created' ? this.authorizeOrReportId(payment) : payment;
   }
 
   /**

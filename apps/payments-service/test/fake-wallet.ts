@@ -2,6 +2,7 @@ import {
   WalletGateway,
   WalletRejectedError,
   WalletUnavailableError,
+  type WalletAccount,
   type WalletHold,
 } from '../src/wallet/wallet.gateway';
 
@@ -26,13 +27,15 @@ interface FakeHold {
 export class FakeWallet extends WalletGateway {
   readonly accounts = new Map<string, FakeAccount>();
   readonly holds = new Map<string, FakeHold>();
-  private readonly byKey = new Map<string, string>();
-  private readonly transfers = new Map<string, string>();
+  readonly byKey = new Map<string, string>();
+  readonly transfers = new Map<string, string>();
   private seq = 0;
 
   /** Следующие N вызовов завершатся сетевой ошибкой. */
   failNextCalls = 0;
-  readonly calls = { createHold: 0, captureHold: 0, releaseHold: 0, transfer: 0 };
+  /** Вызывается после успешного резервирования, до возврата результата (для имитации гонок). */
+  afterHoldCreated?: () => Promise<void>;
+  readonly calls = { getAccount: 0, createHold: 0, captureHold: 0, releaseHold: 0, transfer: 0 };
 
   open(id: string, balance: bigint, currency = 'RUB'): void {
     this.accounts.set(id, { balance, held: 0n, currency });
@@ -40,6 +43,12 @@ export class FakeWallet extends WalletGateway {
 
   balanceOf(id: string): bigint {
     return this.accounts.get(id)!.balance;
+  }
+
+  async getAccount(id: string): Promise<WalletAccount> {
+    this.calls.getAccount++;
+    this.maybeFail();
+    return { id, currency: this.account(id).currency, kind: 'user' };
   }
 
   async createHold(input: {
@@ -61,6 +70,7 @@ export class FakeWallet extends WalletGateway {
     const id = this.nextId('hold');
     this.holds.set(id, { id, accountId: input.accountId, amount, status: 'active' });
     this.byKey.set(input.idempotencyKey, id);
+    await this.afterHoldCreated?.();
     return { id, currency: account.currency };
   }
 

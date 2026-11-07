@@ -8,6 +8,22 @@ import { Transfer } from './transfer.entity';
 
 const SYSTEM_OWNER = 'system';
 
+/**
+ * Предел баланса пользовательского счёта (5e12 минорных единиц, при сумме операции до 1e12).
+ * Реалистичный предел не даёт одному клиенту исчерпать общий ресурс.
+ */
+export const MAX_BALANCE = 5_000_000_000_000n;
+
+/**
+ * Предел модуля баланса системного счёта валюты. Он зеркалит всех клиентов, поэтому бизнес-лимита
+ * не имеет; граница лишь превращает переполнение `bigint` (~9.22e18) в 422 вместо 500 из Postgres.
+ * При сумме операции до 1e12 достижима только после миллионов пополнений.
+ */
+export const MAX_SYSTEM_BALANCE = 9_000_000_000_000_000_000n;
+
+const balanceLimit = (account: Account): bigint =>
+  account.kind === 'system' ? MAX_SYSTEM_BALANCE : MAX_BALANCE;
+
 export interface TransferCommand {
   idempotencyKey: string;
   requestHash: string;
@@ -15,6 +31,12 @@ export interface TransferCommand {
   toAccountId: string;
   amount: bigint;
   reference: string | null;
+  /**
+   * Разрешает системный счёт как участника перевода. Только пополнение (`deposit`) — зеркало
+   * внешнего мира; публичные переводы и capture холда с системным счётом иметь дела не должны,
+   * иначе деньги можно выпустить из ничего.
+   */
+  allowSystemAccount?: boolean;
 }
 
 /**
@@ -70,11 +92,27 @@ export class LedgerService {
     }
     const from = accounts.get(cmd.fromAccountId)!;
     const to = accounts.get(cmd.toAccountId)!;
+    if (!cmd.allowSystemAccount && (from.kind === 'system' || to.kind === 'system')) {
+      throw new DomainError(
+        'SYSTEM_ACCOUNT_FORBIDDEN',
+        'Системные счета недоступны для обычных переводов',
+      );
+    }
     if (from.currency !== to.currency) {
       throw new DomainError('CURRENCY_MISMATCH', 'Валюты счетов не совпадают');
     }
     if (from.kind === 'user' && from.available < cmd.amount) {
       throw new DomainError('INSUFFICIENT_FUNDS', `На счёте ${from.id} недостаточно средств`);
+    }
+
+    if (
+      to.balance + cmd.amount > balanceLimit(to) ||
+      from.balance - cmd.amount < -balanceLimit(from)
+    ) {
+      throw new DomainError(
+        'BALANCE_LIMIT_EXCEEDED',
+        'Операция превышает допустимый предел баланса',
+      );
     }
 
     from.balance -= cmd.amount;

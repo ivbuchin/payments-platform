@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
 import { AMOUNT_PATTERN, AMOUNT_PATTERN_MESSAGE } from '@pp/nest-kit';
 import type { LedgerEntry } from '../ledger/ledger-entry.entity';
 import type { Account } from './account.entity';
@@ -45,14 +45,10 @@ export class LedgerQueryDto {
   before?: string;
 }
 
-export class AccountIdParam {
-  @IsUUID()
-  id: string;
-}
-
 export const toAccountView = (a: Account) => ({
   id: a.id,
   ownerId: a.ownerId,
+  kind: a.kind,
   currency: a.currency,
   balance: a.balance.toString(),
   held: a.held.toString(),

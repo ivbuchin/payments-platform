@@ -1,8 +1,8 @@
-import { type DynamicModule, Module } from '@nestjs/common';
+import { type DynamicModule, Logger, Module } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { AmqpPublisher } from './amqp-publisher';
 import { EventPublisher } from './event-publisher';
-import { OutboxRelay, type OutboxRelayOptions } from './outbox-relay';
+import { DEFAULT_RELAY_OPTIONS, OutboxRelay, type OutboxRelayOptions } from './outbox-relay';
 import { OutboxWriter } from './outbox-writer';
 
 export interface OutboxModuleOptions {
@@ -15,10 +15,13 @@ export interface OutboxModuleOptions {
 export class OutboxModule {
   static register(options: OutboxModuleOptions = {}): DynamicModule {
     const providers: DynamicModule['providers'] = [OutboxWriter];
-    if (options.amqpUrl) {
+    if (!options.amqpUrl) {
+      new Logger(OutboxModule.name).warn(
+        'AMQP_URL не задан: события копятся в outbox и не публикуются',
+      );
+    } else {
       const relayOptions: OutboxRelayOptions = {
-        batchSize: 100,
-        pollIntervalMs: 500,
+        ...DEFAULT_RELAY_OPTIONS,
         ...options.relay,
       };
       providers.push(

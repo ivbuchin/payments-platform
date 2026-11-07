@@ -2,10 +2,10 @@
  * Деньги — всегда целые числа в минорных единицах (копейки/центы).
  * В домене это bigint, в API и событиях — десятичная строка: JSON number теряет точность выше 2^53.
  */
-export const AMOUNT_PATTERN = /^[1-9]\d{0,17}$/;
+export const AMOUNT_PATTERN = /^[1-9]\d{0,11}$/;
 
 export const AMOUNT_PATTERN_MESSAGE =
-  'amount: положительное целое в минорных единицах, строкой, до 18 цифр';
+  'amount: положительное целое в минорных единицах, строкой, до 12 цифр';
 
 export function parseAmount(raw: string): bigint {
   if (!AMOUNT_PATTERN.test(raw)) {

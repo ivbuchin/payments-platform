@@ -12,8 +12,14 @@ async function bootstrap(): Promise<void> {
     AppModule.forRoot({
       databaseUrl: env.DATABASE_URL,
       walletUrl: env.WALLET_URL,
+      walletKeySecret: env.WALLET_KEY_SECRET,
       walletTimeoutMs: env.WALLET_TIMEOUT_MS,
       amqpUrl: env.AMQP_URL,
+      reconcile: {
+        intervalMs: env.RECONCILE_INTERVAL_MS,
+        staleAfterMs: env.RECONCILE_STALE_AFTER_MS,
+        authorizationTtlMs: env.AUTHORIZATION_TTL_MS,
+      },
     }),
   );
   configureApp(app);

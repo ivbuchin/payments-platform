@@ -4,7 +4,7 @@ import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
-import { DeliveryWorker } from '../src/delivery/delivery-worker';
+import { DeliveryWorker, type DeliveryOptions } from '../src/delivery/delivery-worker';
 import { EventIngestService } from '../src/messaging/event-ingest.service';
 
 export interface TestApp {
@@ -18,6 +18,17 @@ export interface TestApp {
 
 export const MAX_ATTEMPTS = 3;
 
+export const DELIVERY_OPTIONS_FOR_TESTS: DeliveryOptions = {
+  maxAttempts: MAX_ATTEMPTS,
+  baseDelayMs: 5,
+  maxDelayMs: 20,
+  timeoutMs: 2000,
+  batchSize: 50,
+  leaseMs: 60_000,
+  pollIntervalMs: 50,
+  autoStart: false,
+};
+
 /** Реальный PostgreSQL в контейнере; воркер не стартует сам — тесты тактируют его вручную. */
 export async function startTestApp(): Promise<TestApp> {
   const container = await new PostgreSqlContainer('postgres:17-alpine').start();
@@ -26,16 +37,7 @@ export async function startTestApp(): Promise<TestApp> {
       AppModule.forRoot({
         databaseUrl: container.getConnectionUri(),
         allowPrivateWebhookTargets: true,
-        delivery: {
-          maxAttempts: MAX_ATTEMPTS,
-          baseDelayMs: 5,
-          maxDelayMs: 20,
-          timeoutMs: 2000,
-          batchSize: 50,
-          leaseMs: 60_000,
-          pollIntervalMs: 50,
-          autoStart: false,
-        },
+        delivery: DELIVERY_OPTIONS_FOR_TESTS,
       }),
     ],
   }).compile();
